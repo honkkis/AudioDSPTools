@@ -135,14 +135,17 @@ public:
       mResampler1 = std::make_unique<LanczosResampler>(mInputSampleRate, mRenderingSampleRate);
       mResampler2 = std::make_unique<LanczosResampler>(mRenderingSampleRate, mInputSampleRate);
 
-        
-      // Initialize the LowPassBiquad filter with appropriate parameters
-      double cutoffFrequency = std::min(mInputSampleRate, mRenderingSampleRate) / 2.0 * 0.9; // For example
-      double qualityFactor = 0.707; // A common choice for a Butterworth filter
-      double gainDB = 0; // Typically, no gain change for a low-pass filter
-      recursive_linear_filter::BiquadParams params(mRenderingSampleRate, cutoffFrequency, qualityFactor, gainDB);
-      mLowPassFilter.SetParams(params);
+      double cutoffFrequency = std::min(mInputSampleRate, mRenderingSampleRate) / 2.0 * 0.9;
       
+      // For filter before upsampling, use inputSampleRate for BiquadParams
+      recursive_linear_filter::BiquadParams paramsBeforeUpsample(mInputSampleRate, cutoffFrequency, 0.707, 0);
+      mLowPassFilterBeforeEffect.SetParams(paramsBeforeUpsample);
+
+      // For filter before downsampling, use renderingSampleRate for BiquadParams
+      recursive_linear_filter::BiquadParams paramsBeforeDownsample(mRenderingSampleRate, cutoffFrequency, 0.707, 0);
+      mLowPassFilterAfterEffect.SetParams(paramsBeforeDownsample);
+
+
       // Zeroes the scratch pointers so that we warm up with silence.
       ClearBuffers();
 
@@ -150,9 +153,11 @@ public:
       // of output samples.
       const auto midSamples = mResampler2->GetNumSamplesRequiredFor(1);
       mLatency = int(mResampler1->GetNumSamplesRequiredFor(midSamples));
+      
+      DSP_SAMPLE** silentProcessed = mLowPassFilterBeforeEffect.Process(mScratchExternalInputPointers.GetList(), NCHANS, mLatency);
       // 1. Push some silence through the first resampler.
       //
-      mResampler1->PushBlock(mScratchExternalInputPointers.GetList(), mLatency);
+      mResampler1->PushBlock(silentProcessed, mLatency);
       const size_t populated = mResampler1->PopBlock(mEncapsulatedInputPointers.GetList(), midSamples);
       if (populated < midSamples)
       {
@@ -164,8 +169,8 @@ public:
       // Therefore, we don't *acutally* need to use `func()`--we can assume that it would output silence!
       // func(mEncapsulatedInputPointers.GetList(), mEncapsulatedOutputPointers.GetList(), (int)populated);
       FallbackFunc(mEncapsulatedInputPointers.GetList(), mEncapsulatedOutputPointers.GetList(), (int)populated);
-      DSP_SAMPLE** silentProcessed = mLowPassFilter.Process(mEncapsulatedOutputPointers.GetList(), 1, populated);
-      mResampler2->PushBlock(silentProcessed, populated);
+      DSP_SAMPLE** silentProcessed2 = mLowPassFilterAfterEffect.Process(mEncapsulatedOutputPointers.GetList(), 1, populated);
+      mResampler2->PushBlock(silentProcessed2, populated);
       // Now we're ready for the first "real" buffer.
     }
   }
@@ -178,7 +183,8 @@ public:
    * malloc if you pass in captures */
   void ProcessBlock(T** inputs, T** outputs, int nFrames, BlockProcessFunc func)
   {
-    mResampler1->PushBlock(inputs, nFrames);
+    DSP_SAMPLE** filteredInputs = mLowPassFilterBeforeEffect.Process(inputs, NCHANS, nFrames);
+    mResampler1->PushBlock(filteredInputs, nFrames);
     // This is the most samples the encapsualted context might get. Sometimes it'll get fewer.
     const auto maxEncapsulatedLen = MaxEncapsulatedBlockSize(nFrames);
 
@@ -197,7 +203,7 @@ public:
       
       
       func(mEncapsulatedInputPointers.GetList(), mEncapsulatedOutputPointers.GetList(), (int)populated1);
-      DSP_SAMPLE** filteredOutputs = mLowPassFilter.Process(mEncapsulatedOutputPointers.GetList(), 1, populated1);
+      DSP_SAMPLE** filteredOutputs = mLowPassFilterAfterEffect.Process(mEncapsulatedOutputPointers.GetList(), 1, populated1);
       // And push the results into the second resampler so that it has what the external context requires.
       mResampler2->PushBlock(filteredOutputs, populated1);
     }
@@ -338,7 +344,8 @@ private:
   // Pair of resamplers for (1) external -> encapsulated, (2) encapsulated -> external
   std::unique_ptr<LanczosResampler> mResampler1, mResampler2;
   // lowpass filter to reduce alias
-  recursive_linear_filter::LowPassBiquad mLowPassFilter; // Declaration of the LowPassBiquad filter
+  recursive_linear_filter::LowPassBiquad mLowPassFilterBeforeEffect;
+  recursive_linear_filter::LowPassBiquad mLowPassFilterAfterEffect;
 
 };
 
