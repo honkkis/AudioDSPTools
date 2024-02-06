@@ -37,7 +37,8 @@ namespace dsp
 template<typename T = double, int NCHANS = 2, size_t A = 12>
 class LanczosResamplerWithLPF : public LanczosResampler<T, NCHANS, A> {
 public:
-    recursive_linear_filter::LowPassBiquad lowPassFilter;
+    recursive_linear_filter::LowPassBiquad lowPassFilter1, lowPassFilter2; // Two instances for cascaded filtering
+
     bool applyLPF = false; // Conditionally apply LPF
 
     // Constructor
@@ -51,7 +52,8 @@ public:
             double qualityFactor = 0.707; // Common choice for a Butterworth filter
             double gainDB = 0.0; // No gain change for a low-pass filter
             recursive_linear_filter::BiquadParams params(inputRate, cutoffFrequency, qualityFactor, gainDB);
-            lowPassFilter.SetParams(params);
+            lowPassFilter1.SetParams(params); // Set parameters for the first filter
+            lowPassFilter2.SetParams(params); // Set the same parameters for the second filter for a steeper slope
             applyLPF = true;
         }
     }
@@ -61,8 +63,10 @@ public:
         if (applyLPF) {
             // Apply the low-pass filter to the inputs before resampling
             DSP_SAMPLE** dspInputs = reinterpret_cast<DSP_SAMPLE**>(inputs);
-            DSP_SAMPLE** filteredOutputs = lowPassFilter.Process(dspInputs, NCHANS, nFrames);
-            LanczosResampler<T, NCHANS, A>::PushBlock(reinterpret_cast<T**>(filteredOutputs), nFrames);
+            DSP_SAMPLE** filteredOutputs1 = lowPassFilter1.Process(dspInputs, NCHANS, nFrames); // First filtering pass
+            DSP_SAMPLE** filteredOutputs2 = lowPassFilter2.Process(filteredOutputs1, NCHANS, nFrames); // Second filtering pass for a steeper slope
+
+            LanczosResampler<T, NCHANS, A>::PushBlock(reinterpret_cast<T**>(filteredOutputs2), nFrames);
         } else {
             // Directly call base class PushBlock without LPF
             LanczosResampler<T, NCHANS, A>::PushBlock(inputs, nFrames);
