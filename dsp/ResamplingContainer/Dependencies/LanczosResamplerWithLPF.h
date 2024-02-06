@@ -45,15 +45,20 @@ public:
     LanczosResamplerWithLPF(float inputRate, float outputRate)
     : LanczosResampler<T, NCHANS, A>(inputRate, outputRate) {
         // Compute cutoff frequency based on the output rate, set to just below Nyquist
-        float cutoffFrequency = outputRate / 2.0 * 0.9; // 90% of Nyquist frequency
+        float cutoffFrequency1 = outputRate / 2.0 * 0.9; // 90% of Nyquist frequency
+        // Adjusted cutoff frequency for the second filter, increased by 2%
+        float cutoffFrequency2 = outputRate / 2.0 * 0.918; // 91.8% of Nyquist frequency (0.9 * 1.02 = 0.918)
 
         // Only initialize and apply LPF if downsampling
         if (outputRate < inputRate) {
             double qualityFactor = 0.707; // Common choice for a Butterworth filter
             double gainDB = 0.0; // No gain change for a low-pass filter
-            recursive_linear_filter::BiquadParams params(inputRate, cutoffFrequency, qualityFactor, gainDB);
+            recursive_linear_filter::BiquadParams params(inputRate, cutoffFrequency1, qualityFactor, gainDB);
             lowPassFilter1.SetParams(params); // Set parameters for the first filter
-            lowPassFilter2.SetParams(params); // Set the same parameters for the second filter for a steeper slope
+            // Set slightly adjusted parameters for the second filter for a steeper slope
+            recursive_linear_filter::BiquadParams params2(inputRate, cutoffFrequency2, qualityFactor, gainDB);
+            lowPassFilter2.SetParams(params2);
+            
             applyLPF = true;
         }
     }
